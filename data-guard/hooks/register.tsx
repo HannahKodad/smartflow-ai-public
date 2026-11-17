@@ -238,6 +238,25 @@ function hasClientData(p: Profile, text: string): boolean {
   return needles.some(n => hay.includes(n))
 }
 
+// Best-effort Drive metadata lookup (the guard's own connector call — not gated).
+async function driveMeta($: any, server: string, fileId: string): Promise<{ title: string; parentId: string } | null> {
+  if (!server || !fileId) return null
+  try {
+    const res = await $.mcp.call(server, 'get_file_metadata', { fileId, excludeContentSnippets: true })
+    const text: string = (res?.content ?? []).map((b: any) => (typeof b?.text === 'string' ? b.text : '')).join('')
+    try {
+      const o = JSON.parse(text)
+      return { title: String(o.title ?? ''), parentId: String(o.parentId ?? '') }
+    } catch {
+      const title = /"title"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(text)?.[1] ?? ''
+      const parentId = /"parentId"\s*:\s*"([^"]*)"/.exec(text)?.[1] ?? ''
+      return { title, parentId }
+    }
+  } catch {
+    return null
+  }
+}
+
 function recipientsOf(args: Record<string, unknown>): string[] {
   const out: string[] = []
   for (const key of ['to', 'cc', 'bcc', 'emailAddress']) {
@@ -331,8 +350,32 @@ export const register: Register = on => {
       : withPseudo
         ? [REFUSE_LABEL, PSEUDONYMIZE_LABEL, approveLabel]
         : [REFUSE_LABEL, approveLabel]
+    // Enrich a MOVE card with the real source: file name + ID + source folder.
+    // For a Drive file we look its metadata up (and the parent folder's name).
+    let moveFileName = String(call.args.title ?? call.args.name ?? '')
+    const moveFileId = String(call.args.fileId ?? call.args.file_path ?? '')
+    let moveSrcPath = '' // source folder, written to the log so a move can be reverted
+    let moveSrcLine = ''
+    if (isMove && call.family === 'drive' && call.args.fileId) {
+      const m = await driveMeta($, call.server, String(call.args.fileId))
+      if (m) {
+        if (m.title) moveFileName = m.title
+        if (m.parentId) {
+          const parent = await driveMeta($, call.server, m.parentId)
+          moveSrcPath = `${parent?.title || '(název nezjištěn)'} (ID: ${m.parentId})`
+          moveSrcLine = `Ze složky: ${moveSrcPath}`
+        }
+      } else {
+        moveSrcLine = '(zdrojovou složku a název se nepodařilo dohledat)'
+      }
+    }
+
     const question = isMove
-      ? cardText(verdict.card, level, piiNote) + `\n\n⚠ Přesun nelze potvrdit tlačítkem. Pro potvrzení NAPIŠ do pole „Jiné" přesně:\n${moveToken}\n(Kliknutí, Enter ani zavření dialogu přesun nepovolí.)`
+      ? cardText(verdict.card, level, piiNote) +
+        `\n\nSoubor: ${moveFileName || '(bez názvu)'} (ID: ${moveFileId || '?'})` +
+        (moveSrcLine ? `\n${moveSrcLine}` : '') +
+        `\nDo složky: ${moveToken}` +
+        `\n\n⚠ Přesun nelze potvrdit tlačítkem. Pro potvrzení NAPIŠ do pole „Jiné" přesně:\n${moveToken}\n(Kliknutí, Enter ani zavření dialogu přesun nepovolí.)`
       : cardText(verdict.card, level, piiNote)
 
     let answer: string
@@ -370,9 +413,10 @@ export const register: Register = on => {
       event: verdict.event,
       action: verdict.action,
       tool: call.tool,
-      file_id: String(call.args.fileId ?? call.args.file_path ?? ''),
+      file_id: moveFileId || String(call.args.fileId ?? call.args.file_path ?? ''),
       target_folder: String(call.args.parentId ?? ''),
-      file_name: String(call.args.title ?? call.args.name ?? ''),
+      file_name: moveFileName || String(call.args.title ?? call.args.name ?? ''),
+      original_path: moveSrcPath,
       reason: 'potvrzeno uživatelkou',
       recovery: verdict.card.recovery,
       outcome,
