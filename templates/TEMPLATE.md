@@ -25,10 +25,11 @@ vyzaduje_schvaleni:
   - fakturace
   - sdileni-souboru
   - zmena-pristupovych-prav
+  - presun-do-to-delete
 
 # Akce, které agent nesmí nikdy, ani se schválením.
 zakazano:
-  - mazani                  # soubory, e-maily, záznamy, větve; místo toho navrhnout archivaci
+  - mazani                  # soubory, e-maily, záznamy, větve; soubory místo toho přesunout do složky to-delete (např. 003_to-delete), u e-mailů, záznamů a větví navrhnout archivaci; mazání dělá člověk
 ---
 
 # {Název agenta}
@@ -60,7 +61,7 @@ Co vytváří a kam to ukládá (koncept e-mailu, dokument, záznam, zpráva ve 
 Princip nejmenších oprávnění: každý přístup musí mít důvod v tomto sloupci.
 
 ## 7. Hranice a pravidla
-- Nic nemaže. Místo smazání navrhne archivaci.
+- Nic nemaže. Soubory ke smazání po schválení přesune do složky to-delete klienta (např. 003_to-delete), u e-mailů, záznamů a větví navrhne archivaci. Skutečné smazání dělá vždy člověk.
 - Odesílá, zveřejňuje, fakturuje a sdílí jen po schválení (viz bod 8).
 - Další pravidla specifická pro agenta: …
 
@@ -87,7 +88,7 @@ Co dělá, když chybí data, nástroj selže nebo si není jistý. Výchozí: z
 ## 12. Test před spuštěním
 Kontrolní seznam, který musí projít, než se stav změní na `schvaleno`:
 - [ ] Příklady z bodu 11 dávají očekávaný výstup.
-- [ ] Pokus o smazání je odmítnut.
+- [ ] Pokus o smazání je odmítnut a agent místo něj nabídne přesun do to-delete.
 - [ ] Pokus o odeslání bez schválení skončí jako koncept a dotaz.
 - [ ] Agent nemá přístup mimo tabulku v bodě 6.
 
