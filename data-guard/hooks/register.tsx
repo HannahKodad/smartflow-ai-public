@@ -238,6 +238,25 @@ function hasClientData(p: Profile, text: string): boolean {
   return needles.some(n => hay.includes(n))
 }
 
+// Best-effort Drive metadata lookup (the guard's own connector call — not gated).
+async function driveMeta($: any, server: string, fileId: string): Promise<{ title: string; parentId: string } | null> {
+  if (!server || !fileId) return null
+  try {
+    const res = await $.mcp.call(server, 'get_file_metadata', { fileId, excludeContentSnippets: true })
+    const text: string = (res?.content ?? []).map((b: any) => (typeof b?.text === 'string' ? b.text : '')).join('')
+    try {
+      const o = JSON.parse(text)
+      return { title: String(o.title ?? ''), parentId: String(o.parentId ?? '') }
+    } catch {
+      const title = /"title"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(text)?.[1] ?? ''
+      const parentId = /"parentId"\s*:\s*"([^"]*)"/.exec(text)?.[1] ?? ''
+      return { title, parentId }
+    }
+  } catch {
+    return null
+  }
+}
+
 function recipientsOf(args: Record<string, unknown>): string[] {
   const out: string[] = []
   for (const key of ['to', 'cc', 'bcc', 'emailAddress']) {
@@ -318,12 +337,50 @@ export const register: Register = on => {
     // "Ne" is FIRST (primary/default) so an accidental Enter or stray click refuses.
     const approveLabel = verdict.action === 'send' ? APPROVE_SEND_LABEL : verdict.action === 'share' ? APPROVE_SHARE_LABEL : APPROVE_MOVE_LABEL
     const withPseudo = pii.length > 0 && verdict.action === 'send'
-    const approvals = withPseudo ? [PSEUDONYMIZE_LABEL, approveLabel] : [approveLabel]
-    const options = withPseudo ? [REFUSE_LABEL, PSEUDONYMIZE_LABEL, approveLabel] : [REFUSE_LABEL, approveLabel]
+
+    // Anti-accidental MOVE: a move/overwrite can NOT be approved by any button or
+    // by Enter — only by TYPING the destination exactly into the dialog's "Other"
+    // field. Both visible buttons refuse, so a click or Enter always cancels.
+    const isMove = verdict.action === 'move'
+    const moveToken = (String(call.args.parentId ?? call.args.destination ?? call.args.file_path ?? '').trim() || 'POTVRZUJI PŘESUN')
+
+    const approvals = isMove ? [moveToken] : withPseudo ? [PSEUDONYMIZE_LABEL, approveLabel] : [approveLabel]
+    const options = isMove
+      ? [REFUSE_LABEL, 'Ne, nechat být']
+      : withPseudo
+        ? [REFUSE_LABEL, PSEUDONYMIZE_LABEL, approveLabel]
+        : [REFUSE_LABEL, approveLabel]
+    // Enrich a MOVE card with the real source: file name + ID + source folder.
+    // For a Drive file we look its metadata up (and the parent folder's name).
+    let moveFileName = String(call.args.title ?? call.args.name ?? '')
+    const moveFileId = String(call.args.fileId ?? call.args.file_path ?? '')
+    let moveSrcPath = '' // source folder, written to the log so a move can be reverted
+    let moveSrcLine = ''
+    if (isMove && call.family === 'drive' && call.args.fileId) {
+      const m = await driveMeta($, call.server, String(call.args.fileId))
+      if (m) {
+        if (m.title) moveFileName = m.title
+        if (m.parentId) {
+          const parent = await driveMeta($, call.server, m.parentId)
+          moveSrcPath = `${parent?.title || '(název nezjištěn)'} (ID: ${m.parentId})`
+          moveSrcLine = `Ze složky: ${moveSrcPath}`
+        }
+      } else {
+        moveSrcLine = '(zdrojovou složku a název se nepodařilo dohledat)'
+      }
+    }
+
+    const question = isMove
+      ? cardText(verdict.card, level, piiNote) +
+        `\n\nSoubor: ${moveFileName || '(bez názvu)'} (ID: ${moveFileId || '?'})` +
+        (moveSrcLine ? `\n${moveSrcLine}` : '') +
+        `\nDo složky: ${moveToken}` +
+        `\n\n⚠ Přesun nelze potvrdit tlačítkem. Pro potvrzení NAPIŠ do pole „Jiné" přesně:\n${moveToken}\n(Kliknutí, Enter ani zavření dialogu přesun nepovolí.)`
+      : cardText(verdict.card, level, piiNote)
 
     let answer: string
     try {
-      answer = await $.ui.ask(cardText(verdict.card, level, piiNote), { options, header: 'data-guard' })
+      answer = await $.ui.ask(question, { options, header: 'data-guard' })
     } catch {
       // Dialog dismissed / no answer → default-deny.
       S.refusedThisTurn = true
@@ -356,9 +413,10 @@ export const register: Register = on => {
       event: verdict.event,
       action: verdict.action,
       tool: call.tool,
-      file_id: String(call.args.fileId ?? call.args.file_path ?? ''),
+      file_id: moveFileId || String(call.args.fileId ?? call.args.file_path ?? ''),
       target_folder: String(call.args.parentId ?? ''),
-      file_name: String(call.args.title ?? call.args.name ?? ''),
+      file_name: moveFileName || String(call.args.title ?? call.args.name ?? ''),
+      original_path: moveSrcPath,
       reason: 'potvrzeno uživatelkou',
       recovery: verdict.card.recovery,
       outcome,
