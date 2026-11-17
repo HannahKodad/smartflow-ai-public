@@ -32,6 +32,10 @@ Potvrzování (karty) je až druhá vrstva a platí jen pro **interní** akce (p
 sdílení s konkrétními lidmi v doméně). Karta je **default-deny**: povolí jen výslovné „Ano";
 Enter, zavření dialogu nebo kliknutí mimo = blok. Primární tlačítko je „Ne".
 
+**Ochrana proti náhodnému přesunu:** přesun/přepsání nelze potvrdit žádným tlačítkem ani Enterem —
+jen vědomým **opsáním názvu cílové složky** do pole „Jiné" (např. `999_to-delete`). Obě viditelná
+tlačítka odmítají, takže kliknutí ani Enter přesun nikdy nepovolí.
+
 ## Úrovně ochrany
 
 - **standard** – zákaz mazání; přesun, sdílení a přepsání jen po potvrzení s kartou dopadu;

@@ -318,12 +318,26 @@ export const register: Register = on => {
     // "Ne" is FIRST (primary/default) so an accidental Enter or stray click refuses.
     const approveLabel = verdict.action === 'send' ? APPROVE_SEND_LABEL : verdict.action === 'share' ? APPROVE_SHARE_LABEL : APPROVE_MOVE_LABEL
     const withPseudo = pii.length > 0 && verdict.action === 'send'
-    const approvals = withPseudo ? [PSEUDONYMIZE_LABEL, approveLabel] : [approveLabel]
-    const options = withPseudo ? [REFUSE_LABEL, PSEUDONYMIZE_LABEL, approveLabel] : [REFUSE_LABEL, approveLabel]
+
+    // Anti-accidental MOVE: a move/overwrite can NOT be approved by any button or
+    // by Enter — only by TYPING the destination exactly into the dialog's "Other"
+    // field. Both visible buttons refuse, so a click or Enter always cancels.
+    const isMove = verdict.action === 'move'
+    const moveToken = (String(call.args.parentId ?? call.args.destination ?? call.args.file_path ?? '').trim() || 'POTVRZUJI PŘESUN')
+
+    const approvals = isMove ? [moveToken] : withPseudo ? [PSEUDONYMIZE_LABEL, approveLabel] : [approveLabel]
+    const options = isMove
+      ? [REFUSE_LABEL, 'Ne, nechat být']
+      : withPseudo
+        ? [REFUSE_LABEL, PSEUDONYMIZE_LABEL, approveLabel]
+        : [REFUSE_LABEL, approveLabel]
+    const question = isMove
+      ? cardText(verdict.card, level, piiNote) + `\n\n⚠ Přesun nelze potvrdit tlačítkem. Pro potvrzení NAPIŠ do pole „Jiné" přesně:\n${moveToken}\n(Kliknutí, Enter ani zavření dialogu přesun nepovolí.)`
+      : cardText(verdict.card, level, piiNote)
 
     let answer: string
     try {
-      answer = await $.ui.ask(cardText(verdict.card, level, piiNote), { options, header: 'data-guard' })
+      answer = await $.ui.ask(question, { options, header: 'data-guard' })
     } catch {
       // Dialog dismissed / no answer → default-deny.
       S.refusedThisTurn = true

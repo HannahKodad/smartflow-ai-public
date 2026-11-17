@@ -317,3 +317,14 @@ test('isApproval: only an exact approval label approves; accidents deny', async 
   expect(isApproval(null, [APPROVE_MOVE_LABEL])).toBe(false)
   expect(isApproval('Ano', [APPROVE_MOVE_LABEL])).toBe(false) // partial/old label does NOT approve
 })
+
+test('anti-accidental move: only typing the exact destination approves', async () => {
+  const dest = '999_to-delete'
+  expect(isApproval(dest, [dest])).toBe(true)
+  expect(isApproval(' ' + dest + ' ', [dest])).toBe(true) // trimmed
+  expect(isApproval(REFUSE_LABEL, [dest])).toBe(false)
+  expect(isApproval('Ne, nechat být', [dest])).toBe(false)
+  expect(isApproval(APPROVE_MOVE_LABEL, [dest])).toBe(false) // a button label never approves a move
+  expect(isApproval('', [dest])).toBe(false)
+  expect(isApproval('999_to-delet', [dest])).toBe(false) // a typo does not approve
+})
