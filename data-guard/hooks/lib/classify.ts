@@ -12,6 +12,7 @@ export type Action =
   | 'create' // creating/uploading/writing a new file
   | 'read' // reading a file or listing
   | 'memory' // writing to Claude's memory/notes
+  | 'publish' // exposing to a public address: artifact, page, shared link, push
   | 'other'
 
 export type Family = 'drive' | 'gmail' | 'calendar' | 'docs' | 'web' | 'browser' | 'bash' | 'file' | 'agent' | 'memory' | 'other'
@@ -56,7 +57,9 @@ const CAL_SUFFIXES = new Set([
 ])
 
 const DELETE_VERBS = /^(trash|delete)/
-const SHARE_VERBS = /(share|permission|inherited)/i
+// A permission-CHANGING verb — not a read like get_file_permissions or
+// list_shared_drives (those merely contain "permission"/"shared").
+const SHARE_VERBS = /^(share|unshare)|^(add|set|create|update|remove|delete)_permission|writers_can_share/i
 const SEND_VERBS = /^(send|forward|reply)/
 
 export function familyOf(tool: string, suffix: string): Family {
@@ -73,7 +76,11 @@ export function familyOf(tool: string, suffix: string): Family {
   return 'other'
 }
 
-const NETWORK_CMD = /\b(curl|wget|nc|ncat|netcat|ssh|scp|sftp|rsync|ftp|telnet|http|https|npm|pnpm|yarn|pip|pip3|brew|git\s+(push|clone|fetch|pull|remote))\b/
+const NETWORK_CMD = /\b(curl|wget|nc|ncat|netcat|ssh|scp|sftp|rsync|ftp|telnet|http|https|npm|pnpm|yarn|pip|pip3|brew|gh|aws|gcloud|az|kubectl|git\s+(push|clone|fetch|pull|remote))\b/
+// Publishing from a shell: pushing to a remote repo, creating a public repo/PR/gist/release.
+const PUBLISH_CMD = /\bgit\s+push\b|\bgh\s+(repo|pr|release|gist)\s+\w*(create|edit|publish)?\b/
+// Tools that expose content at a public address (artifacts / hosted pages).
+const PUBLISH_TOOL = /^(Artifact|mcp__claude-artifacts)/
 // Deletion in a shell command. Note: redirects like `2>/dev/null` or `>/dev/null`
 // are NOT deletion — only real remove/truncate verbs are. `find … -delete` is caught
 // in context; a bare `-delete` flag (e.g. rsync/git branch --delete) via `--delete`.
@@ -88,11 +95,14 @@ export function classify(input: Record<string, unknown>): Call {
   const { tool: _t, tool_use_id: _u, agentId: _a, ...args } = input
   const actions = new Set<Action>()
 
+  if (PUBLISH_TOOL.test(tool)) actions.add('publish')
+
   if (family === 'bash') {
     const cmd = String(args.command ?? '')
     if (DELETE_CMD.test(cmd)) actions.add('delete')
     if (NETWORK_CMD.test(cmd)) actions.add('network')
     if (EVASION_CMD.test(cmd)) actions.add('network') // treated as possible exfil on GDPR levels
+    if (PUBLISH_CMD.test(cmd)) actions.add('publish')
   } else if (family === 'file') {
     if (tool === 'Read') actions.add('read')
     else if (tool === 'Write') {

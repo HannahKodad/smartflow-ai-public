@@ -6,7 +6,7 @@ import { classify } from './lib/classify'
 import type { Call } from './lib/classify'
 import { NO_CLIENT, parseProfile, CLIENT_NAME, isAllowedDomain } from './lib/profile'
 import type { Profile, Level } from './lib/profile'
-import { decide } from './lib/guard'
+import { decide, isApproval, REFUSE_LABEL, APPROVE_MOVE_LABEL, APPROVE_SHARE_LABEL, APPROVE_SEND_LABEL, PSEUDONYMIZE_LABEL } from './lib/guard'
 import type { Verdict, Card } from './lib/guard'
 import { detectPii, PII_LABEL, mask, pseudonymizeArgs, textOf } from './lib/pii'
 import { appendedBody, logPath, nowIso, parseCsv, LOG_COLUMNS } from './lib/log'
@@ -225,6 +225,19 @@ function templateYaml(client: string): string {
   ].join('\n')
 }
 
+// "Client data" = anything that must not leak: detected PII, or any of the
+// client's own identifying strings (name, slug, domain, custom sensitive terms).
+// Deliberately broad — over-blocking a web/send is safer than leaking.
+function hasClientData(p: Profile, text: string): boolean {
+  if (!text) return false
+  if (detectPii(text).length > 0) return true
+  const hay = text.toLowerCase()
+  const needles = [p.display_name, p.client, ...p.sensitive_terms, ...p.allowed_domains]
+    .map(s => (s ?? '').toLowerCase().trim())
+    .filter(s => s.length >= 4)
+  return needles.some(n => hay.includes(n))
+}
+
 function recipientsOf(args: Record<string, unknown>): string[] {
   const out: string[] = []
   for (const key of ['to', 'cc', 'bcc', 'emailAddress']) {
@@ -258,6 +271,7 @@ export const register: Register = on => {
       level,
       piiText,
       sharingOutsideDomain: (emails: string[]) => emails.filter(em => em.includes('@') && !isAllowedDomain(profile, em)),
+      hasClientData: (text: string) => hasClientData(profile, text),
     }
 
     if (level === 'gdpr-strict' && call.actions.includes('read') && (call.family === 'drive' || call.family === 'gmail')) {
@@ -301,28 +315,38 @@ export const register: Register = on => {
 
     const pii = verdict.pii ?? detectPii(piiText)
     const piiNote = pii.length ? pii.map(h => `${PII_LABEL[h.kind]}: ${mask(h.value)}`).join('; ') : undefined
-    const options = pii.length && verdict.action === 'send' ? ['Pseudonymizovat a odeslat', 'Ano', 'Ne'] : ['Ano', 'Ne']
+    // "Ne" is FIRST (primary/default) so an accidental Enter or stray click refuses.
+    const approveLabel = verdict.action === 'send' ? APPROVE_SEND_LABEL : verdict.action === 'share' ? APPROVE_SHARE_LABEL : APPROVE_MOVE_LABEL
+    const withPseudo = pii.length > 0 && verdict.action === 'send'
+    const approvals = withPseudo ? [PSEUDONYMIZE_LABEL, approveLabel] : [approveLabel]
+    const options = withPseudo ? [REFUSE_LABEL, PSEUDONYMIZE_LABEL, approveLabel] : [REFUSE_LABEL, approveLabel]
 
     let answer: string
     try {
       answer = await $.ui.ask(cardText(verdict.card, level, piiNote), { options, header: 'data-guard' })
     } catch {
-      await bump($, 'blocked')
-      return { deny: 'data-guard: akce nepotvrzena (bez odpovědi), proto blokována.' }
-    }
-
-    if (answer === 'Ne' || answer.toLowerCase().startsWith('ne')) {
+      // Dialog dismissed / no answer → default-deny.
       S.refusedThisTurn = true
       await bump($, 'blocked')
-      await writeLog($, profile, level, { event: 'blocked-attempt', action: verdict.action, tool: call.tool, reason: 'uživatelka odmítla', outcome: 'blocked' })
-      return { deny: 'data-guard: odmítnuto uživatelkou.' }
+      await writeLog($, profile, level, { event: 'blocked-attempt', action: verdict.action, tool: call.tool, reason: 'nepotvrzeno (dialog zavřen) — default-deny', outcome: 'blocked' })
+      return { deny: 'data-guard: akce nepotvrzena (dialog zavřen), proto zablokována.' }
+    }
+
+    // DEFAULT-DENY: proceed ONLY on an exact explicit approval label. Anything
+    // else — the refuse label, an empty answer, Enter on the primary (= Ne), a
+    // stray click, any default — blocks. An accident can never approve.
+    if (!isApproval(answer, approvals)) {
+      S.refusedThisTurn = true
+      await bump($, 'blocked')
+      await writeLog($, profile, level, { event: 'blocked-attempt', action: verdict.action, tool: call.tool, reason: answer === REFUSE_LABEL ? 'odmítnuto uživatelkou' : 'nepotvrzeno (default-deny)', outcome: 'blocked' })
+      return { deny: 'data-guard: akce nepotvrzena, proto zablokována (povolí jen výslovné „Ano").' }
     }
 
     S.confirmsThisTurn++
     await bump($, 'confirmed')
     let eventInput = e
     let outcome: LogRow['outcome'] = 'allowed'
-    if (answer === 'Pseudonymizovat a odeslat') {
+    if (answer.trim() === PSEUDONYMIZE_LABEL) {
       const rewritten = pseudonymizeArgs(call.args, S.pseudoMap)
       eventInput = { ...e, ...rewritten } as typeof e
       outcome = 'pseudonymized'

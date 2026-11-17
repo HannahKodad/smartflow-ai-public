@@ -13,6 +13,25 @@ v terminálu (`rm`, `rmdir`, `unlink`, `find -delete`, `git clean`, `git rm`, p�
 `truncate`) i přepsání souboru prázdným obsahem (`Write` s prázdným `content`). Trvalé smazání a
 vysypání koše jsou zakázané úplně a nelze je povolit. Skutečné smazání děláš vždy ty ručně.
 
+## Hlavní cíl: data klienta nesmí ven
+
+Na úrovních **gdpr** a **gdpr-strict** jsou všechny cesty úniku **tvrdé zákazy** — neodemkne je
+potvrzovací karta ani číslo klienta, jen změna profilu klienta (tu děláš ty):
+
+1. **Web** (`WebSearch`, `WebFetch`, prohlížeč) – blok, pokud dotaz obsahuje data klienta (osobní
+   údaj, jméno/slug klienta, doménu nebo citlivý termín z profilu); na gdpr-strict web jen z whitelistu.
+2. **Síť z terminálu** – `curl`, `wget`, `nc`, `ssh`, `scp`, `rsync`, `ftp`, `gh`, `git push` a skripty
+   v Pythonu/Node se na gdpr/gdpr-strict blokují tvrdě.
+3. **Zveřejnění** – artefakty, veřejné stránky, sdílené odkazy, push do repozitáře → blok.
+4. **Google Drive** – „kdokoli s odkazem" a sdílení mimo doménu klienta → blok na **všech** úrovních.
+5. **E-mail** – odeslání/přeposlání mimo doménu nebo s daty klienta → blok; smí se jen připravit koncept.
+6. **Ostatní konektory** (Slack, nahrávání…) – jen podle whitelistu klienta, vše ostatní blok.
+7. **Paměť/poznámky** – data klienta se neukládají do Claude paměti ani poznámek mimo Drive klienta.
+
+Potvrzování (karty) je až druhá vrstva a platí jen pro **interní** akce (přesun mezi složkami,
+sdílení s konkrétními lidmi v doméně). Karta je **default-deny**: povolí jen výslovné „Ano";
+Enter, zavření dialogu nebo kliknutí mimo = blok. Primární tlačítko je „Ne".
+
 ## Úrovně ochrany
 
 - **standard** – zákaz mazání; přesun, sdílení a přepsání jen po potvrzení s kartou dopadu;
@@ -70,11 +89,21 @@ original_path, target_folder, reason, recovery, outcome, actor
 ## Co hook neumí
 
 - Chrání jen Clauda v Claude Code s tímto pluginem; ne web claude.ai, ne akce, které uděláš ručně.
-- Kontrola terminálu je vzorová: maskovaný příkaz (Python/Node, mezikrok přes zapsaný skript, base64)
-  může na úrovni standard projít; na gdpr/gdpr-strict je síť/exfil blokovaná nebo vyžaduje potvrzení.
-- Detekce osobních údajů je spolehlivá u rodného čísla, personnummer, IBAN a e-mailu; slabší u telefonu
-  a adresy (falešné poplachy i nezachycené údaje).
+- **Jména/termíny:** únik přes web/e-mail se pozná podle osobních údajů, jména/slug klienta, domény a
+  termínů z `sensitive_terms`. Volné jméno, které v profilu není a není ve tvaru osobního údaje, může
+  uniknout — proto u citlivých klientů doplň do `sensitive_terms` jména a názvy, které se nesmí objevit venku.
+- **Terminál:** blokují se příkazy podle vzorů (`curl`, `wget`, `ssh`, `gh`, `git push`, Python/Node…).
+  Silně zamaskovaný příkaz (base64, nezvyklý nástroj, skript zapsaný a spuštěný oklikou) může projít —
+  na gdpr/gdpr-strict je síť blokovaná tvrdě, ale ne každý obfuskovaný tvar hook rozpozná.
+- **Git/commit:** hook vidí příkaz, ne obsah commitu/diffu. Blokuje `git push`/`gh` (egress) na gdpr/strict,
+  ale nenaskenuje, co přesně je ve staged souborech — kontrolu obsahu před pushem dělej i ty.
+- **Zveřejnění:** pokrývá nástroje artefaktů a `git push`/`gh`. Jiný, neznámý publikační nástroj by se
+  chytil jen jako „mimo whitelist" — proto whitelist drž úzký.
+- **Detekce osobních údajů** je spolehlivá u rodného čísla, personnummer, IBAN a e-mailu; slabší u telefonu
+  a adresy. Detekuje podle formátu (i neplatný součet), takže hlásí i překlepnuté nebo fiktivní číslo.
 - Oprávnění složek nastavuješ ty; plugin je umí jen zkontrolovat a akci odmítnout.
+- Infrastrukturní nástroje Claude Code (session, terminálový panel) jsou z kontroly vyňaté, aby nešlo
+  zablokovat samotné rozhraní; nejsou cestou pro data klienta ven, ale nejsou ani hlídané.
 
 ## Instalace do každé relace
 
