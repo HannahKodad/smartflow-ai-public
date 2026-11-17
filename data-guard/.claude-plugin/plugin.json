@@ -1,0 +1,7 @@
+{
+  "name": "data-guard",
+  "version": "0.1.0",
+  "description": "Universal GDPR data-protection guard: blocks deletion, enforces to-delete + audit log, per-client profiles, PII detection and connector whitelist.",
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}
